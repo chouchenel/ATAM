@@ -1,0 +1,110 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ATAM Smart Scoring</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:8px;font-family:system-ui,sans-serif;background:#111;color:#fff}
+button{font:inherit;color:#fff;border:0;border-radius:12px;padding:14px 10px;margin:3px}
+input{font:inherit;padding:8px;border-radius:8px;border:0;width:90px;margin:3px}
+.red{background:#c62828}.blue{background:#1565c0}.gray{background:#444}.green{background:#2e7d32}.y{background:#f9a825;color:#000}
+.row{display:flex;flex-wrap:wrap;gap:4px}.c{flex:1;min-width:30%}.cen{text-align:center}
+.big{font-size:18vw;font-weight:800;text-align:center;line-height:1}
+.qr{display:inline-block;background:#fff;color:#000;padding:8px;margin:6px;border-radius:8px;text-align:center}
+#panel{margin-top:10px}.ev{display:block;width:100%;text-align:left}
+</style></head><body><div id="app"></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+// ====== PASTE YOUR DATABASE URL BELOW (from Firebase > Realtime Database page, top of the data tab) ======
+const DB_URL="https://atam-smart-scoring-default-rtdb.europe-west1.firebasedatabase.app";
+firebase.initializeApp({apiKey:"AIzaSyBw5Kd6ZHyn9O-Nu5xv8ftrXN3DbUQayHg",authDomain:"atam-smart-scoring.firebaseapp.com",databaseURL:DB_URL,projectId:"atam-smart-scoring",appId:"1:671872570040:web:bd225afda742df9f529a4d"});
+const db=firebase.database(),$=id=>document.getElementById(id),app=$('app');
+const Q=new URLSearchParams(location.search);let M=Q.get('m'),R=Q.get('r');
+const NM={punch:'Punch',body:'Body',head:'Head',sbody:'Spin Body',shead:'Spin Head'};
+const DEF={pt:{punch:1,body:2,head:3,sbody:4,shead:6},round:120};
+let off=0;db.ref('.info/serverTimeOffset').on('value',s=>off=s.val()||0);
+const now=()=>Date.now()+off;
+const fmt=ms=>{const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+try{navigator.wakeLock&&navigator.wakeLock.request('screen')}catch(e){}
+if(!M){location.replace(location.pathname+'?m='+Math.random().toString(36).slice(2,7)+'&r=c')}
+const P='matches/'+M;
+if(R==='1'||R==='2'||R==='3')referee();else if(R==='d')display();else central();
+
+// ---------- REFEREE ----------
+function referee(){
+ app.innerHTML='<h3 class="cen">Referee '+R+'</h3><div id="rb"></div>';
+ db.ref(P+'/cfg').on('value',s=>{const c=s.val()||DEF;let h='';
+  for(const side of['red','blue']){h+='<div class="row">';
+   for(const t in NM)h+=`<button class="${side} c" style="padding:26px 4px" onclick="hit('${side}','${t}')">${NM[t]}<br>+${c.pt[t]}</button>`;
+   h+='</div><br>'}
+  $('rb').innerHTML=h});
+}
+function hit(side,type){navigator.vibrate&&navigator.vibrate(40);
+ db.ref(P+'/in').push({r:R,side,type,ts:firebase.database.ServerValue.TIMESTAMP})}
+
+// ---------- DISPLAY ----------
+function display(){
+ app.innerHTML=`<div class="big" id="dt">0:00</div><div class="cen" id="dr"></div><div class="row" style="margin-top:10px">
+ <div class="c red cen" style="padding:10px;border-radius:12px"><h2 id="a1"></h2><div class="big" style="font-size:30vw" id="a2">0</div><div id="a3"></div></div>
+ <div class="c blue cen" style="padding:10px;border-radius:12px"><h2 id="b1"></h2><div class="big" style="font-size:30vw" id="b2">0</div><div id="b3"></div></div></div>`;
+ let st={};db.ref(P+'/st').on('value',s=>{st=s.val()||{};
+  $('a1').textContent=st.rn||'Red';$('b1').textContent=st.bn||'Blue';
+  $('a2').textContent=st.red||0;$('b2').textContent=st.blue||0;
+  $('a3').textContent='Gam-jeom: '+(st.redG||0);$('b3').textContent='Gam-jeom: '+(st.blueG||0);
+  $('dr').textContent='Round '+(st.round||1)});
+ setInterval(()=>{$('dt').textContent=fmt(st.run?st.endAt-now():st.remain||0)},200);
+}
+
+// ---------- CENTRAL REFEREE ----------
+let cfg=JSON.parse(JSON.stringify(DEF)),S={red:0,blue:0,redG:0,blueG:0,round:1,remain:120000,endAt:0,run:false,rn:'Red',bn:'Blue'};
+let E=[],pend=[],rec=null,chunks=[],t0=0;
+function central(){
+ app.innerHTML=`<div class="row"><input id="rn" value="Red" oninput="nm()"><input id="bn" value="Blue" oninput="nm()"></div>
+ <div class="row"><div class="c cen"><div class="big" id="rs">0</div><div id="rg"></div>
+  <button class="red" onclick="adj('red',1)">+1</button><button class="gray" onclick="adj('red',-1)">-1</button><button class="y" onclick="gam('red')">Gam-jeom</button></div>
+ <div class="c cen"><div class="big" id="bs">0</div><div id="bg"></div>
+  <button class="blue" onclick="adj('blue',1)">+1</button><button class="gray" onclick="adj('blue',-1)">-1</button><button class="y" onclick="gam('blue')">Gam-jeom</button></div></div>
+ <div class="big" id="tm">0:00</div><div class="cen" id="rd"></div>
+ <div class="row cen"><button class="green" id="go" onclick="toggle()">Start</button><button class="gray" onclick="nextR()">Next round</button>
+ <button class="blue" onclick="review()">Review</button><button class="gray" onclick="mark()">Video mark</button>
+ <button class="gray" onclick="cam()">Camera ON</button><button class="gray" onclick="qrs()">QR codes</button>
+ <button class="gray" onclick="sets()">Settings</button><button class="gray" onclick="newM()">New match</button></div>
+ <video id="pv" muted playsinline autoplay style="width:100%;max-height:30vh;margin-top:8px"></video><div id="panel"></div>`;
+ db.ref(P+'/cfg').once('value').then(s=>{if(s.val())cfg=s.val();else db.ref(P+'/cfg').set(cfg);S.remain=cfg.round*1000;sync()});
+ db.ref(P+'/in').on('child_added',s=>{const i=s.val();pend=pend.filter(p=>now()-p.ts<3000);
+  if(!S.run||now()-i.ts>5000)return;
+  const k=pend.findIndex(p=>p.side==i.side&&p.type==i.type&&p.r!=i.r&&Math.abs(p.ts-i.ts)<1500);
+  if(k>=0){pend.splice(k,1);const v=cfg.pt[i.type];S[i.side]+=v;log(i.side+' +'+v+' '+NM[i.type]);sync()}else pend.push(i)});
+ setInterval(()=>{if(S.run&&left()<=0){S.remain=0;S.run=false;log('End of round');sync()}draw()},200);
+}
+const left=()=>S.run?Math.max(0,S.endAt-now()):S.remain;
+function sync(){db.ref(P+'/st').set(S);draw()}
+function draw(){$('rs').textContent=S.red;$('bs').textContent=S.blue;
+ $('rg').textContent='Gam-jeom: '+S.redG;$('bg').textContent='Gam-jeom: '+S.blueG;
+ $('tm').textContent=fmt(left());$('rd').textContent='Round '+S.round;$('go').textContent=S.run?'Pause':'Start'}
+function nm(){S.rn=$('rn').value;S.bn=$('bn').value;sync()}
+function toggle(){if(!S.run){S.endAt=now()+S.remain;S.run=true}else{S.remain=left();S.run=false}sync()}
+function nextR(){S.round++;S.run=false;S.remain=cfg.round*1000;sync()}
+function adj(side,d){S[side]=Math.max(0,S[side]+d);log('Manual '+side+' '+(d>0?'+':'')+d);sync()}
+function gam(side){const o=side=='red'?'blue':'red';S[side+'G']++;S[o]+=1;log('Gam-jeom '+side+' (+1 '+o+')');sync()}
+function log(txt){const e={txt,rd:S.round,mt:cfg.round*1000-left(),vt:t0?(Date.now()-t0)/1000:null};E.push(e);db.ref(P+'/ev').push(e)}
+function mark(){log('VIDEO MARK');navigator.vibrate&&navigator.vibrate(60)}
+function newM(){if(confirm('Start a NEW match?'))location.href=location.pathname+'?m='+Math.random().toString(36).slice(2,7)+'&r=c'}
+async function cam(){try{const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+ $('pv').srcObject=st;chunks=[];rec=new MediaRecorder(st);rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};rec.start(3000);t0=Date.now()}
+ catch(e){alert('Camera error: '+e.message)}}
+function review(){if(S.run)toggle();const p=$('panel');
+ p.innerHTML='<video id="rv" controls playsinline style="width:100%"></video><div class="row"><button class="gray" onclick="spd(.25)">0.25x</button><button class="gray" onclick="spd(.5)">0.5x</button><button class="gray" onclick="spd(1)">1x</button></div><div id="el"></div>';
+ $('el').innerHTML=E.slice().reverse().map(e=>`<button class="gray ev" onclick="seek(${e.vt})">R${e.rd} · ${fmt(e.mt)} · ${e.txt}</button>`).join('')||'No events yet';
+ if(rec){rec.requestData();setTimeout(()=>{const rv=$('rv');rv.src=URL.createObjectURL(new Blob(chunks,{type:rec.mimeType}));
+  rv.onloadedmetadata=()=>{if(rv.duration===Infinity){rv.currentTime=1e101;rv.ontimeupdate=()=>{rv.ontimeupdate=null;rv.currentTime=0}}}},400)}}
+function seek(vt){const rv=$('rv');if(vt==null||!rv)return;rv.currentTime=Math.max(0,vt-3);rv.play()}
+function spd(x){$('rv').playbackRate=x}
+function qrs(){const b=location.origin+location.pathname,p=$('panel');p.innerHTML='';
+ [['1','Referee 1'],['2','Referee 2'],['3','Referee 3'],['d','Display']].forEach(([r,n])=>{
+  const d=document.createElement('div');d.className='qr';d.innerHTML='<b>'+n+'</b><div></div>';p.appendChild(d);
+  new QRCode(d.lastChild,{text:b+'?m='+M+'&r='+r,width:150,height:150})})}
+function sets(){$('panel').innerHTML=Object.keys(NM).map(t=>`${NM[t]} <input type="number" id="s_${t}" value="${cfg.pt[t]}">`).join('<br>')+
+ `<br>Round seconds <input type="number" id="s_r" value="${cfg.round}"><br><button class="green" onclick="saveS()">Save</button>`}
+function saveS(){for(const t in NM)cfg.pt[t]=+$('s_'+t).value;cfg.round=+$('s_r').value;
+ db.ref(P+'/cfg').set(cfg);if(!S.run)S.remain=cfg.round*1000;sync();$('panel').innerHTML='Saved ✔'}
+</script></body></html>
