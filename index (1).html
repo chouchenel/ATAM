@@ -1,0 +1,150 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ATAM Smart Scoring</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:8px;font-family:system-ui,sans-serif;background:#111;color:#fff}
+button{font:inherit;color:#fff;border:0;border-radius:12px;padding:14px 10px;margin:3px}
+input{font:inherit;padding:8px;border-radius:8px;border:0;width:110px;margin:3px}
+.red{background:#c62828}.blue{background:#1565c0}.gray{background:#444}.green{background:#2e7d32}.y{background:#f9a825;color:#000}
+.row{display:flex;flex-wrap:wrap;gap:4px}.c{flex:1;min-width:30%}.cen{text-align:center}
+.big{font-size:18vw;font-weight:800;text-align:center;line-height:1}
+.qr{display:inline-block;background:#fff;color:#000;padding:8px;margin:6px;border-radius:8px;text-align:center}
+.ev{display:block;width:100%;text-align:left}#panel{margin-top:10px}
+.sd{padding:1vh;border-radius:12px;flex:1}.sc{font-size:32vh;font-weight:800;line-height:1}.lb{font-size:5vh;height:6vh;font-weight:700}
+#ex{position:fixed;inset:0;background:rgba(0,0,0,.94);z-index:5;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;font-size:6vh}
+table{font-size:4.5vh;border-collapse:collapse}td,th{padding:.5vh 2vw}
+</style></head><body><div id="dot" style="position:fixed;top:4px;right:4px;width:12px;height:12px;border-radius:6px;background:#f00;z-index:99"></div><div id="app"></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const DB_URL="https://atam-smart-scoring-default-rtdb.europe-west1.firebasedatabase.app";
+firebase.initializeApp({apiKey:"AIzaSyBw5Kd6ZHyn9O-Nu5xv8ftrXN3DbUQayHg",authDomain:"atam-smart-scoring.firebaseapp.com",databaseURL:DB_URL,projectId:"atam-smart-scoring",appId:"1:671872570040:web:bd225afda742df9f529a4d"});
+const db=firebase.database(),$=id=>document.getElementById(id),app=$('app');
+const Q=new URLSearchParams(location.search);let M=Q.get('m'),R=Q.get('r');
+const NM={shead:'SPIN HEAD',head:'HEAD',sbody:'SPIN TRUNK',body:'TRUNK',punch:'PUNCH'};
+const CAT={punch:'p',body:'b',sbody:'b',head:'h',shead:'h'},K={red:'A',blue:'B'};
+const DEF={pt:{punch:1,body:2,head:3,sbody:4,shead:6},round:120,rest:60};
+let off=0;db.ref('.info/serverTimeOffset').on('value',s=>off=s.val()||0);
+db.ref('.info/connected').on('value',s=>$('dot').style.background=s.val()?'#0f0':'#f00');
+const now=()=>Date.now()+off;
+const fmt=ms=>{const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+try{navigator.wakeLock&&navigator.wakeLock.request('screen')}catch(e){}
+if(!M)location.replace(location.pathname+'?m='+Math.random().toString(36).slice(2,7)+'&r=c');
+const P='matches/'+M;
+// ---------- SOUND ----------
+let AC;const au=()=>AC=AC||new(window.AudioContext||window.webkitAudioContext)();
+function tone(f,d,t,v){const a=au(),o=a.createOscillator(),g=a.createGain();o.type=t||'sine';o.frequency.value=f;g.gain.value=v||.3;o.connect(g);g.connect(a.destination);o.start();o.stop(a.currentTime+d)}
+const whistle=()=>{tone(2800,.25,'square',.15);setTimeout(()=>tone(3100,1,'square',.15),280)};
+const reward=()=>{tone(880,.15);setTimeout(()=>tone(1320,.3),170)};
+
+// ---------- REFEREE (r1,r2 = red ; b1,b2 = blue) ----------
+function referee(){const side=R[0]=='r'?'red':'blue';
+ app.innerHTML=`<div class="cen" style="font-size:5vw;margin-bottom:6px">${side.toUpperCase()} · Referee ${R[1]}</div><div id="rb"></div>`;
+ db.ref(P+'/cfg').on('value',s=>{const c=s.val()||DEF;let h='';
+  for(const t in NM)h+=`<button class="${side}" style="width:100%;height:17vh;font-size:7vw;margin:3px 0" onclick="hit('${side}','${t}')">${NM[t]} +${c.pt[t]}</button>`;
+  $('rb').innerHTML=h})}
+function hit(side,type){navigator.vibrate&&navigator.vibrate(50);db.ref(P+'/in').push({r:R,side,type,ts:firebase.database.ServerValue.TIMESTAMP})}
+
+// ---------- DISPLAY ----------
+function display(){
+ const sd=(k,c)=>`<div class="sd ${c}"><h2 class="cen" id="${k}n" style="margin:0;font-size:6vh"></h2><div class="cen sc" id="${k}s">0</div><div class="cen lb" id="${k}l">&nbsp;</div><div class="cen" style="font-size:4.5vh">GAM-JEOM <b id="${k}g">0</b> &nbsp; ROUNDS <b id="${k}w">0</b></div></div>`;
+ app.innerHTML=`<div id="st" onclick="unlock()" style="position:fixed;inset:0;background:#000;z-index:9;display:flex;align-items:center;justify-content:center;font-size:7vw">TAP TO START</div><div id="ex"></div>
+ <div class="cen"><img src="logo.jpg" onerror="this.remove()" style="height:11vh;vertical-align:middle"> <b id="mn" style="font-size:7vh"></b></div>
+ <div class="cen"><span id="tm" style="font-size:20vh;font-weight:800;padding:0 2vw;border-radius:2vh"></span></div><div class="cen" id="rd" style="font-size:5vh"></div>
+ <div class="row" style="margin-top:1vh">${sd('A','red')}${sd('B','blue')}</div>`;
+ let s={},le=null,ls=null,fi=true;
+ db.ref(P+'/st').on('value',x=>{s=x.val()||{};
+  if(fi){fi=false;le=s.ev&&s.ev.id;ls=s.snd&&s.snd.id;return}
+  if(s.ev&&s.ev.id!==le){le=s.ev.id;flash(s.ev)}
+  if(s.snd&&s.snd.id!==ls){ls=s.snd.id;whistle()}});
+ setInterval(()=>{if(!s.ph)return;const ph=s.ph,ms=s.run?s.endAt-now():(s.remain||0),t=$('tm');
+  $('mn').textContent='MATCH '+(s.mn||1);
+  for(const c of['red','blue']){const k=K[c];$(k+'n').textContent=c=='red'?s.rn:s.bn;$(k+'s').textContent=s[c]||0;$(k+'g').textContent=s[c+'G']||0;$(k+'w').textContent=(s.rw&&s.rw[c])||0}
+  const low=ph=='fight'&&s.run&&ms<10000;
+  t.textContent=low?Math.max(0,ms/1000).toFixed(2):fmt(ms);t.style.background=low?'#fdd835':'';t.style.color=low?'#000':'';
+  $('rd').textContent='ROUND '+(s.round||1)+(ph=='fight'&&!s.run?'  ·  TIME OUT':'');
+  const ex=$('ex'),h=exHTML(s,ph,ms);ex.style.display=h?'flex':'none';if(ex.dataset.h!==h){ex.dataset.h=h;ex.innerHTML=h}},50)}
+function unlock(){au().resume();$('st').remove();const e=document.documentElement;e.requestFullscreen&&e.requestFullscreen().catch(()=>{})}
+function flash(e){const k=K[e.side];$(k+'s').style.color='#fdd835';$(k+'l').textContent=e.txt;reward();
+ setTimeout(()=>{$(k+'s').style.color='';$(k+'l').innerHTML='&nbsp;'},1000)}
+function exHTML(s,ph,ms){const nm=c=>c=='red'?s.rn:s.bn,col=c=>c=='red'?'#e53935':'#1e88e5';
+ if(s.replay)return'<div style="font-size:12vh;font-weight:800;color:#fdd835">VIDEO REPLAY</div>';
+ if(ph=='idle')return'<div style="font-size:14vh;font-weight:800">MATCH '+(s.mn||1)+'</div>';
+ if(ph=='tie')return'<div style="font-size:12vh;font-weight:800;color:#fdd835">TIE</div><div>TIME OUT</div>';
+ if((ph=='rest'||ph=='done')&&s.res){const r=s.res,w=r.w,l=w=='red'?'blue':'red';
+  const row=c=>`<tr style="color:${col(c)}"><td>${nm(c)}</td><td>${r[c]}</td><td>${r.st[c].p}</td><td>${r.st[c].b}</td><td>${r.st[c].h}</td></tr>`;
+  const head=ph=='done'?`<div style="font-size:12vh;font-weight:800;color:${col(w)}">WINNER<br>${nm(w)}</div>`:`<div style="font-size:7vh;color:${col(w)}">ROUND ${r.rd} · ${nm(w)}</div><div style="font-size:9vh;font-weight:800;color:#fdd835">TIME OUT ${fmt(ms)}</div>`;
+  return head+`<table><tr><th></th><th>PTS</th><th>PUNCH</th><th>TRUNK</th><th>HEAD</th></tr>${row(w)}${row(l)}</table>`}
+ return''}
+
+// ---------- CENTRAL ----------
+function fresh(){return{red:0,blue:0,redG:0,blueG:0,round:1,remain:120000,endAt:0,run:false,ph:'idle',rn:'Hung',bn:'Chung',mn:1,rw:{red:0,blue:0},st:{red:{p:0,b:0,h:0},blue:{p:0,b:0,h:0}}}}
+let cfg=JSON.parse(JSON.stringify(DEF)),S=fresh(),E=[],pend=[],rec=null,chunks=[],t0=0;
+const left=()=>S.run?Math.max(0,S.endAt-now()):S.remain;
+function central(){
+ try{Object.assign(cfg,JSON.parse(localStorage.atam))}catch(e){}
+ app.innerHTML=`<div class="row"><input id="rn" oninput="nm()"><input id="bn" oninput="nm()"><input id="mnn" type="number" style="width:70px" onchange="S.mn=+this.value;sync()"><span id="cs" style="font-size:12px"></span></div>
+ <div class="row"><div class="c cen"><div class="big" id="rs">0</div><div id="rg"></div>
+  <button class="red" onclick="adj('red',1)">+1</button><button class="gray" onclick="adj('red',-1)">-1</button><button class="y" onclick="gam('red')">Gam-jeom</button></div>
+ <div class="c cen"><div class="big" id="bs">0</div><div id="bg"></div>
+  <button class="blue" onclick="adj('blue',1)">+1</button><button class="gray" onclick="adj('blue',-1)">-1</button><button class="y" onclick="gam('blue')">Gam-jeom</button></div></div>
+ <div class="big" id="tm">0:00</div><div class="cen" id="rd"></div>
+ <div class="row cen"><button class="green" id="go" onclick="toggle()">Start</button><button class="gray" onclick="endRound()">End round</button>
+ <button class="blue" onclick="review()">Review</button><button class="gray" onclick="mark()">Video mark</button>
+ <button class="gray" onclick="cam()">Camera ON</button><button class="gray" onclick="qrs()">QR codes</button>
+ <button class="gray" onclick="sets()">Settings</button><button class="gray" onclick="newM()">New match</button></div>
+ <video id="pv" muted playsinline autoplay style="width:100%;max-height:30vh;margin-top:8px"></video><div id="panel"></div>`;
+ db.ref(P+'/st').once('value').then(x=>{if(x.val())Object.assign(S,x.val());else{S.remain=cfg.round*1000;S.mn=+Q.get('n')||1}
+  $('rn').value=S.rn;$('bn').value=S.bn;$('mnn').value=S.mn;db.ref(P+'/cfg').set(cfg);sync()});
+ db.ref(P+'/in').on('child_added',s=>{const i=s.val();pend=pend.filter(p=>now()-p.ts<3000);
+  if(S.ph!='fight'||!S.run||now()-i.ts>5000)return;
+  const k=pend.findIndex(p=>p.side==i.side&&p.type==i.type&&p.r!=i.r&&Math.abs(p.ts-i.ts)<1500);
+  if(k>=0){pend.splice(k,1);award(i.side,i.type)}else pend.push(i)});
+ setInterval(()=>{if(S.run&&left()<=0){if(S.ph=='fight')endRound();else if(S.ph=='rest')nextRound()}draw()},100);
+}
+function sync(){db.ref(P+'/st').set(S).then(()=>{$('cs').textContent=''}).catch(e=>{$('cs').textContent='SYNC ERROR: '+e.message});draw()}
+function draw(){if(!$('rs'))return;$('rs').textContent=S.red;$('bs').textContent=S.blue;$('rg').textContent='Gam-jeom: '+S.redG;$('bg').textContent='Gam-jeom: '+S.blueG;
+ $('tm').textContent=fmt(left());$('rd').textContent='Round '+S.round+' · '+S.ph+' · wins '+S.rw.red+'-'+S.rw.blue;$('go').textContent=S.run?'Pause':'Start'}
+function nm(){S.rn=$('rn').value;S.bn=$('bn').value;sync()}
+function log(txt){const e={txt,rd:S.round,mt:cfg.round*1000-left(),vt:t0?(Date.now()-t0)/1000:null};E.push(e);db.ref(P+'/ev').push(e)}
+function ev(side,txt){S.ev={id:Date.now(),side,txt}}
+function award(side,type){const v=cfg.pt[type];S[side]+=v;S.st[side][CAT[type]]++;ev(side,NM[type]+' +'+v);log(side+' '+NM[type]+' +'+v);chk()}
+function chk(){if(Math.abs(S.red-S.blue)>=12||S.redG>=5||S.blueG>=5)endRound();else sync()}
+function adj(side,d){S[side]=Math.max(0,S[side]+d);log('Manual '+side+' '+d);chk()}
+function gam(side){const o=side=='red'?'blue':'red';S[side+'G']++;S[o]++;ev(o,'GAM-JEOM +1');log('Gam-jeom '+side+' (+1 '+o+')');chk()}
+function toggle(){if(S.ph=='idle'){S.ph='fight';S.snd={id:Date.now()}}
+ if(S.ph!='fight')return;
+ if(!S.run){S.endAt=now()+S.remain;S.run=true}else{S.remain=left();S.run=false}sync()}
+function endRound(){if(S.ph=='tie')S.ph='fight';if(S.ph!='fight')return;
+ const w=S.redG>=5?'blue':S.blueG>=5?'red':S.red>S.blue?'red':S.blue>S.red?'blue':null;
+ S.run=false;S.remain=0;S.snd={id:Date.now()};
+ if(!w){S.ph='tie';log('TIE');sync();return}
+ S.rw[w]++;S.res={w,rd:S.round,red:S.red,blue:S.blue,st:JSON.parse(JSON.stringify(S.st))};log('Round '+S.round+' won by '+w);
+ if(S.rw[w]>=2)S.ph='done';else{S.ph='rest';S.remain=(cfg.rest||60)*1000;S.endAt=now()+S.remain;S.run=true}
+ sync()}
+function nextRound(){S.round++;S.ph='fight';S.red=0;S.blue=0;S.redG=0;S.blueG=0;S.st={red:{p:0,b:0,h:0},blue:{p:0,b:0,h:0}};
+ S.run=false;S.remain=cfg.round*1000;delete S.res;S.snd={id:Date.now()};sync()}
+function mark(){log('VIDEO MARK');navigator.vibrate&&navigator.vibrate(60)}
+function newM(){if(confirm('Start a NEW match?'))location.href=location.pathname+'?m='+Math.random().toString(36).slice(2,7)+'&r=c&n='+(S.mn+1)}
+async function cam(){try{const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+ $('pv').srcObject=st;chunks=[];rec=new MediaRecorder(st);rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};rec.start(3000);t0=Date.now()}
+ catch(e){alert('Camera error: '+e.message)}}
+function review(){if(S.run&&S.ph=='fight')toggle();S.replay=true;sync();
+ $('panel').innerHTML=`<video id="rv" controls playsinline style="width:100%"></video><div class="row"><button class="gray" onclick="spd(.25)">0.25x</button><button class="gray" onclick="spd(.5)">0.5x</button><button class="gray" onclick="spd(1)">1x</button><button class="gray" onclick="$('rv').requestFullscreen()">Full screen</button><button class="red" onclick="closeR()">Exit review</button></div><div id="el"></div>`;
+ $('el').innerHTML=E.slice().reverse().map(e=>`<button class="gray ev" onclick="seek(${e.vt})">R${e.rd} · ${fmt(e.mt)} · ${e.txt}</button>`).join('')||'No events yet';
+ if(rec){rec.requestData();setTimeout(()=>{const rv=$('rv');rv.src=URL.createObjectURL(new Blob(chunks,{type:rec.mimeType}));
+  rv.onloadedmetadata=()=>{if(rv.duration===Infinity){rv.currentTime=1e101;rv.ontimeupdate=()=>{rv.ontimeupdate=null;rv.currentTime=0}}}},400)}}
+function closeR(){S.replay=false;sync();$('panel').innerHTML=''}
+function seek(vt){const rv=$('rv');if(vt==null||!rv)return;rv.currentTime=Math.max(0,vt-3);rv.play()}
+function spd(x){$('rv').playbackRate=x}
+function qrs(){const b=location.origin+location.pathname,p=$('panel');p.innerHTML='';
+ [['r1','Red 1'],['r2','Red 2'],['b1','Blue 1'],['b2','Blue 2'],['d','Display']].forEach(([r,n])=>{
+  const d=document.createElement('div');d.className='qr';d.innerHTML='<b>'+n+'</b><div></div>';p.appendChild(d);
+  new QRCode(d.lastChild,{text:b+'?m='+M+'&r='+r,width:140,height:140})})}
+function sets(){$('panel').innerHTML=Object.keys(NM).map(t=>`${NM[t]} <input type="number" id="s_${t}" value="${cfg.pt[t]}">`).join('<br>')+
+ `<br>Round seconds <input type="number" id="s_r" value="${cfg.round}"><br>Rest seconds <input type="number" id="s_t" value="${cfg.rest||60}"><br><button class="green" onclick="saveS()">Save</button>`}
+function saveS(){for(const t in NM)cfg.pt[t]=+$('s_'+t).value;cfg.round=+$('s_r').value;cfg.rest=+$('s_t').value;
+ localStorage.atam=JSON.stringify(cfg);db.ref(P+'/cfg').set(cfg);if(!S.run&&S.ph!='rest')S.remain=cfg.round*1000;sync();$('panel').innerHTML='Saved ✔'}
+
+if(/^[rb][12]$/.test(R))referee();else if(R=='d')display();else central();
+</script></body></html>
